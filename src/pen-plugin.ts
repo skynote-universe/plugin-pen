@@ -14,6 +14,7 @@ import {
   SELECT_TOOL,
   applyMatrix,
   applyMatrixToVector,
+  clonePlainData,
   computeNodeLocalMatrix,
   generateId,
   invertMatrix,
@@ -47,12 +48,6 @@ import { PathNodeType, DEFAULT_PATH_STROKE_WIDTH } from './path-node';
 export const PEN_PLUGIN_ID = '@skynote-pro/plugin-pen';
 export const PEN_DISPLAY_PLUGIN_ID = '@skynote-pro/plugin-pen/display';
 export const PEN_TOOL = 'pen';
-export const BRUSH_TOOL = 'brush';
-
-/** 判断指定工具标识是否属于绘图模式 (钢笔或画笔) */
-export function isDrawingTool(tool: string | null | undefined): boolean {
-  return tool === PEN_TOOL || tool === BRUSH_TOOL;
-}
 
 const PEN_TOOL_PRIORITY = 85;
 const PEN_KEY_PRIORITY = 15;
@@ -287,19 +282,17 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
     return applyMatrixToVector(worldMatrix, localVector.x, localVector.y);
   }
 
-  /** 退出已有路径的锚点编辑模式 */
+  /** 退出已有路径的锚点编辑模式；没有在编辑时不做任何事 (维护态等防御性调用不得改动别的插件的工具) */
   exitEditMode(options: { restoreTool?: boolean } = {}): void {
     const { restoreTool = true } = options;
-    if (this.isExitingEditMode) return;
+    if (this.isExitingEditMode || this.editingNodeId === null) return;
     this.isExitingEditMode = true;
 
     try {
       if (this.dragSession) {
         this.revertDragSession();
       }
-      if (this.editingNodeId) {
-        this.normalizePathNode(this.editingNodeId);
-      }
+      this.normalizePathNode(this.editingNodeId);
       const previousTool = this.previousToolBeforeEdit;
 
       this.editingNodeId = null;
@@ -310,19 +303,9 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
       this.ctx?.host.overlay.clear(EDIT_OVERLAY_SESSION);
 
       if (this.ctx) {
-        if (restoreTool) {
-          if (previousTool) {
-            // 如果进入二次编辑前是绘图模式 (如 pen 或 brush)，保持/恢复之前的绘图模式；
-            // 如果是从其他模式 (如 select / hand) 进入的二次编辑，回到进入前的模式，不留在绘图模式
-            if (this.ctx.session.tool !== previousTool) {
-              this.ctx.session.setTool(previousTool);
-            }
-          } else if (!isDrawingTool(this.ctx.session.tool)) {
-            // 没有记录前置工具但当前是非绘图模式，保持当前模式
-          } else {
-            // 没有前置工具且当前停留在绘图模式时，安全退回默认选择模式
-            this.ctx.session.setTool(SELECT_TOOL);
-          }
+        // 进入编辑时总会记下原工具：回到进入前的工具 (钢笔、画笔或选择等一视同仁)，钢笔不必认识其他插件的工具
+        if (restoreTool && previousTool && this.ctx.session.tool !== previousTool) {
+          this.ctx.session.setTool(previousTool);
         }
         this.ctx.host.setCursor(this.active ? 'crosshair' : 'default');
       }
@@ -974,12 +957,12 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
     const initialAnchor = sub?.anchors[anchorIndex];
     this.dragSession = {
       nodeId: node.id,
-      snapshot: JSON.parse(JSON.stringify(node)),
+      snapshot: clonePlainData(node),
       groupId: generateId('pen-drag'),
       anchorIndex,
       target,
       startLocalPos,
-      initialAnchor: initialAnchor ? JSON.parse(JSON.stringify(initialAnchor)) : undefined,
+      initialAnchor: initialAnchor && clonePlainData(initialAnchor),
       initialAlt: Boolean(e.modifiers.alt),
       hasActivatedPull: false,
       isCollapsed: false

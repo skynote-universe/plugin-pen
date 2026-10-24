@@ -10,8 +10,6 @@ import {
   PEN_PLUGIN_ID,
   PEN_DISPLAY_PLUGIN_ID,
   PEN_TOOL,
-  BRUSH_TOOL,
-  isDrawingTool,
   type PenPluginOptions,
   type PenSettings
 } from './pen-plugin';
@@ -48,8 +46,6 @@ export {
   PEN_PLUGIN_ID,
   PEN_DISPLAY_PLUGIN_ID,
   PEN_TOOL,
-  BRUSH_TOOL,
-  isDrawingTool,
   DEFAULT_PATH_STROKE_WIDTH,
   buildSubpathSegments,
   buildSvgPathData,

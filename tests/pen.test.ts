@@ -35,7 +35,6 @@ import {
   PenDisplayPlugin,
   PenPlugin,
   PEN_TOOL,
-  BRUSH_TOOL,
   splitCubicBezier,
   computeSubpathsTightBounds,
   type Subpath
@@ -75,6 +74,9 @@ class FakeHost implements CanvasHost, OverlayChannel {
     return { setCaretRect: () => {}, focus: () => {}, close: () => {} };
   }
 }
+
+/** 画笔插件的工具名 (钢笔不认识它，仅测试用于模拟从画笔进入编辑) */
+const BRUSH_TOOL = 'brush';
 
 function setup(options = {}) {
   const host = new FakeHost();
@@ -1275,6 +1277,18 @@ describe('商业钢笔工具插件 (@skynote-pro/plugin-pen)', () => {
     dispatchKey(engine, 'Escape');
     expect(pen.editingId).toBeNull();
     expect(engine.session.tool).toBe(BRUSH_TOOL);
+  });
+
+  it('没有在编辑路径时进入维护态：不改动当前工具 (如其他插件的绘图工具)', () => {
+    const { engine, pen } = setup();
+    engine.session.setTool('brush');
+    const lease = engine.beginMaintenance();
+    lease.resume();
+    expect(pen.editingId).toBeNull();
+    expect(engine.session.tool).toBe('brush');
+    pen.activateTool();
+    engine.beginMaintenance().resume();
+    expect(engine.session.tool).toBe(PEN_TOOL);
   });
 
   it('交互增强：双击画布上的路径节点直接进入该节点的二次编辑模式', () => {
