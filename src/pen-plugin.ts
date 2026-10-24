@@ -15,6 +15,7 @@ import {
   applyMatrix,
   applyMatrixToVector,
   computeNodeLocalMatrix,
+  generateId,
   invertMatrix,
   resolveThemeColor,
   type CanvasKeyboardEvent,
@@ -177,7 +178,6 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
   private hoverTarget: EditHoverTarget | null = null;
   private dragSession: ActiveAnchorDrag | null = null;
   private nextAnchorIdCounter = 1;
-  private lastRightClickCancelTime = 0;
   private readonly settingsListeners = new Set<(settings: Readonly<PenSettings>) => void>();
   /** 二次编辑前所处的工具模式 (例如 'select', 'hand', 'brush', 'pen') */
   private previousToolBeforeEdit: string | null = null;
@@ -261,22 +261,6 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
     if (!this.draft) return;
     this.draft = null;
     this.ctx.host.overlay.clear(DRAFT_OVERLAY_SESSION);
-  }
-
-  /**
-   * 消费本次右键触发的草稿取消事件；若刚才的右键操作刚取消了草稿或正在进行草稿，返回 true 并消耗标记，用于阻止弹出上下文菜单
-   */
-  consumeRightClickCancel(): boolean {
-    const now = Date.now();
-    if (now - this.lastRightClickCancelTime < 1000) {
-      this.lastRightClickCancelTime = 0;
-      return true;
-    }
-    if (this.draft) {
-      this.cancelActiveDraft();
-      return true;
-    }
-    return false;
   }
 
   /** 读取节点的世界变换矩阵 (兼容顶层节点与被拖入容器/导图的子节点) */
@@ -380,22 +364,19 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
     return `a${this.nextAnchorIdCounter++}`;
   }
 
-  onPointerDown(e: CanvasPointerEvent): void {
-    // 右键点击时：若有正在进行的新建草稿，取消并丢弃当前正在创建的路径草稿，不退出绘图工具
-    if (e.button === 2) {
-      if (this.draft) {
-        e.stopPropagation();
-        this.cancelActiveDraft();
-        this.lastRightClickCancelTime = Date.now();
-      } else if (this.dragSession) {
-        e.stopPropagation();
-        this.revertDragSession();
-        this.dragSession = null;
-        this.lastRightClickCancelTime = Date.now();
-      }
-      return;
+  /** 右键：丢弃新建路径草稿或撤回进行中的锚点拖动并消费右键，不弹出菜单，也不退出钢笔工具 */
+  onContextMenu(e: CanvasPointerEvent): void {
+    if (this.draft) {
+      e.stopPropagation();
+      this.cancelActiveDraft();
+    } else if (this.dragSession) {
+      e.stopPropagation();
+      this.revertDragSession();
+      this.dragSession = null;
     }
+  }
 
+  onPointerDown(e: CanvasPointerEvent): void {
     if (e.isClaimed || e.button !== 0 || this.ctx.session.inMaintenance) {
       return;
     }
@@ -994,7 +975,7 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
     this.dragSession = {
       nodeId: node.id,
       snapshot: JSON.parse(JSON.stringify(node)),
-      groupId: `pen:drag:${Date.now()}`,
+      groupId: generateId('pen-drag'),
       anchorIndex,
       target,
       startLocalPos,
@@ -1497,7 +1478,7 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
         this.cancelActiveDraft();
         // 外部主动切换工具时，退出编辑态但不覆盖用户新切换的目标工具
         this.exitEditMode({ restoreTool: false });
-        this.ctx.host.setCursor('default');
+        if (change.previousTool === PEN_TOOL) this.ctx.host.setCursor('default');
       }
     }
   }

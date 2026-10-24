@@ -760,14 +760,16 @@ describe('商业钢笔工具插件 (@skynote-pro/plugin-pen)', () => {
     expect(pen.hasActiveDraft).toBe(true);
     expect(host.sessions.get('pen:draft')).toBeDefined();
 
-    // 右键点击 (button: 2) -> 取消正在创建的钢笔路径，但不退出绘画工具
-    dispatchPointer(engine, 'down', { x: 150, y: 150 }, { button: 2 });
+    // 右键 -> 取消正在创建的钢笔路径并消费右键 (宿主不弹菜单)，但不退出绘画工具
+    const contextMenu = () =>
+      engine.pointer.dispatchContextMenu(new SyntheticPointerEvent({ point: { x: 150, y: 150 }, button: 2 }));
+    expect(contextMenu()).toBe(true);
     expect(pen.hasActiveDraft).toBe(false);
     expect(host.sessions.get('pen:draft')).toBeUndefined();
     expect(pen.active).toBe(true);
     expect(engine.session.tool).toBe('pen');
-    expect(pen.consumeRightClickCancel()).toBe(true);
-    expect(pen.consumeRightClickCancel()).toBe(false);
+    // 没有草稿时不消费，宿主照常弹出菜单
+    expect(contextMenu()).toBe(false);
   });
 
   it('直线与曲线连接点优化：控制柄拖回锚点吸附折叠消除为纯直线，Alt 打破联动对称转换为单柄角点', () => {
