@@ -1383,4 +1383,71 @@ describe('商业钢笔工具插件 (@skynote-pro/plugin-pen)', () => {
     expect(connectors[0].from).toEqual({ nodeId: pathId });
     expect(connectors[0].to).toEqual({ nodeId: clonedNode.id });
   });
+
+  it('草稿已有至少 2 个锚点时右键直接提交开放路径并消费右键，同时触发 onDraftChange 通知', () => {
+    const { engine, pen, store } = setup();
+    const counts: number[] = [];
+    const unsubscribe = pen.onDraftChange((count) => counts.push(count));
+    pen.activateTool();
+
+    // 点 1
+    dispatchPointer(engine, 'down', { x: 100, y: 100 });
+    dispatchPointer(engine, 'up', { x: 100, y: 100 });
+    expect(pen.draftAnchorCount).toBe(1);
+
+    // 点 2
+    dispatchPointer(engine, 'down', { x: 240, y: 160 });
+    dispatchPointer(engine, 'up', { x: 240, y: 160 });
+    expect(pen.draftAnchorCount).toBe(2);
+
+    // 右键 -> 提交为 2 个锚点的开放路径且消费右键、保持钢笔激活
+    const consumed = engine.pointer.dispatchContextMenu(
+      new SyntheticPointerEvent({ point: { x: 240, y: 160 }, button: 2 })
+    );
+    expect(consumed).toBe(true);
+    expect(pen.hasActiveDraft).toBe(false);
+    expect(pen.draftAnchorCount).toBe(0);
+    expect(pen.active).toBe(true);
+    expect(counts).toEqual([1, 2, 0]);
+
+    const [node] = Object.values(store.getView().content.nodes);
+    expect(node).toBeDefined();
+    expect(node.path!.subpaths[0].closed).toBe(false);
+    expect(node.path!.subpaths[0].anchors).toHaveLength(2);
+    unsubscribe();
+  });
+
+  it('支持后期一键切换路径开放与闭合状态，且经事务一步撤销', () => {
+    const { pen, store } = setup();
+    const nodeId = store.createNode({
+      nodeType: PathNodeType.TYPE,
+      x: 100,
+      y: 100,
+      width: 200,
+      height: 120,
+      options: {
+        subpaths: [
+          {
+            anchors: [
+              { id: 'a1', point: { x: 0, y: 0 } },
+              { id: 'a2', point: { x: 200, y: 0 } },
+              { id: 'a3', point: { x: 100, y: 120 } }
+            ],
+            closed: false
+          }
+        ]
+      }
+    })!;
+    store.clearHistory();
+
+    expect(pen.isPathClosed(nodeId)).toBe(false);
+    expect(pen.setPathClosed(nodeId, true)).toBe(true);
+    expect(pen.isPathClosed(nodeId)).toBe(true);
+    // 幂等调用返回 false
+    expect(pen.setPathClosed(nodeId, true)).toBe(false);
+
+    // 撤销恢复为开放路径
+    store.undo();
+    expect(pen.isPathClosed(nodeId)).toBe(false);
+  });
 });

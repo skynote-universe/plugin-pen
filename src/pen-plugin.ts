@@ -174,6 +174,7 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
   private dragSession: ActiveAnchorDrag | null = null;
   private nextAnchorIdCounter = 1;
   private readonly settingsListeners = new Set<(settings: Readonly<PenSettings>) => void>();
+  private readonly draftListeners = new Set<(anchorCount: number) => void>();
   /** 二次编辑前所处的工具模式 (例如 'select', 'hand', 'brush', 'pen') */
   private previousToolBeforeEdit: string | null = null;
   private isExitingEditMode = false;
@@ -207,6 +208,7 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
     this.exitEditMode({ restoreTool: false });
     this.nodeType.clearCache();
     this.settingsListeners.clear();
+    this.draftListeners.clear();
   }
 
   get active(): boolean {
@@ -215,6 +217,10 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
 
   get hasActiveDraft(): boolean {
     return this.draft !== null;
+  }
+
+  get draftAnchorCount(): number {
+    return this.draft?.subpaths[0]?.anchors.length ?? 0;
   }
 
   get editingId(): string | null {
@@ -251,11 +257,49 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
     };
   }
 
+  /** 订阅草稿锚点数变更 (用于笔盒展示“完成路径”等交互状态) */
+  onDraftChange(listener: (anchorCount: number) => void): () => void {
+    this.draftListeners.add(listener);
+    return () => {
+      this.draftListeners.delete(listener);
+    };
+  }
+
+  private notifyDraftChange(): void {
+    const count = this.draftAnchorCount;
+    for (const listener of this.draftListeners) {
+      listener(count);
+    }
+  }
+
+  /** 查询指定路径节点首条子路径是否闭合 */
+  isPathClosed(nodeId: string): boolean | undefined {
+    const node = this.ctx?.document.getNode(nodeId);
+    if (!node || node.nodeType !== PathNodeType.TYPE || !node.path?.subpaths[0]) return undefined;
+    return node.path.subpaths[0].closed;
+  }
+
+  /** 切换指定路径节点的开放/闭合状态，经原子事务提交并支持一步撤销 */
+  setPathClosed(nodeId: string, closed: boolean): boolean {
+    const node = this.ctx?.document.getNode(nodeId);
+    const sub = node?.path?.subpaths[0];
+    if (!node || node.nodeType !== PathNodeType.TYPE || !sub || sub.closed === closed) return false;
+    if (closed && sub.anchors.length < 2) return false;
+    const nextSubpaths = node.path!.subpaths.map((item, idx) => (idx === 0 ? { ...item, closed } : item));
+    this.ctx.document.updateNodes(
+      [nodeId],
+      { path: { ...node.path!, subpaths: nextSubpaths } },
+      { label: closed ? '闭合路径' : '改为开放路径' }
+    );
+    return true;
+  }
+
   /** 取消并丢弃新建路径草稿 */
   cancelActiveDraft(): void {
     if (!this.draft) return;
     this.draft = null;
     this.ctx.host.overlay.clear(DRAFT_OVERLAY_SESSION);
+    this.notifyDraftChange();
   }
 
   /** 读取节点的世界变换矩阵 (兼容顶层节点与被拖入容器/导图的子节点) */
@@ -347,11 +391,15 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
     return `a${this.nextAnchorIdCounter++}`;
   }
 
-  /** 右键：丢弃新建路径草稿或撤回进行中的锚点拖动并消费右键，不弹出菜单，也不退出钢笔工具 */
+  /** 右键：草稿已有 ≥2 个锚点时完成并提交开放路径，否则丢弃草稿；拖动锚点时撤回拖动；均消费右键且不退出钢笔工具 */
   onContextMenu(e: CanvasPointerEvent): void {
     if (this.draft) {
       e.stopPropagation();
-      this.cancelActiveDraft();
+      if (this.draftAnchorCount >= 2) {
+        this.commitDraft();
+      } else {
+        this.cancelActiveDraft();
+      }
     } else if (this.dragSession) {
       e.stopPropagation();
       this.revertDragSession();
@@ -499,6 +547,7 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
         frozenStyle: { ...this.settings }
       };
       this.renderDraftOverlay();
+      this.notifyDraftChange();
     } else {
       const subpath = this.draft.subpaths[0];
       const startAnchor = subpath.anchors[0];
@@ -533,6 +582,7 @@ export class PenPlugin implements SkyNotePlugin, PointerHooks {
       this.draft.lastPointerPos = pt;
       this.draft.isSnappedToClose = false;
       this.renderDraftOverlay();
+      this.notifyDraftChange();
     }
   }
 
